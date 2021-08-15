@@ -1,7 +1,9 @@
 
 package com.exabeam.rgregory.workshop.validation.task
 
-import cats.data.ValidatedNec
+import cats.{Semigroup, SemigroupK}
+import cats.data.{NonEmptyChain, Validated, ValidatedNec}
+import cats.implicits._
 
 object JsonEntityValidation extends App {
 
@@ -67,7 +69,57 @@ object JsonEntityValidation extends App {
   // field reminder must not be empty
   // field remindAt must be > 0
   def parseReminder(json: String): ValidatedNec[ValidationError, Reminder] = {
-    ???
+    import cats.implicits._
+
+    implicit def necSemigroup: Semigroup[NonEmptyChain[ValidationError]] =
+      SemigroupK[NonEmptyChain].algebra[ValidationError]
+
+    def validateEmail(jsObject: JsObject): ValidatedNec[ValidationError, String] =
+      jsObject.value.get("email")
+        .map { field =>
+          Validated.catchOnly[Exception] { field.as[JsString].value }
+            .leftMap(_ => InvalidField("email"))
+            .andThen { email =>
+              Validated.cond(email.contains("@"), email, InvalidField("email"))
+            }
+            .toValidatedNec
+        }.getOrElse(MissingField("email").invalidNec)
+
+
+    def validateReminder(jsObject: JsObject): ValidatedNec[ValidationError, String] =
+      jsObject.value.get("reminder")
+        .map { field =>
+          Validated.catchOnly[Exception] { field.as[JsString].value }
+            .leftMap(_ => InvalidField("reminder"))
+            .andThen { reminder =>
+              Validated.cond(reminder.nonEmpty, reminder, InvalidField("reminder"))
+            }
+            .toValidatedNec
+        }.getOrElse(MissingField("reminder").invalidNec)
+
+    def validateRemindAt(jsObject: JsObject): ValidatedNec[ValidationError, Long] =
+      jsObject.value.get("remindAt")
+        .map { field =>
+          Validated.catchOnly[Exception] { field.as[JsNumber].value.longValue }
+            .leftMap(_ => InvalidField("remindAt"))
+            .andThen { remindAt =>
+              Validated.cond(remindAt > 0, remindAt, InvalidField("remindAt"))
+            }
+            .toValidatedNec
+        }.getOrElse(MissingField("remindAt").invalidNec)
+
+    Validated.catchOnly[Throwable] {
+      Json.parse(json).as[JsObject]
+    }
+      .leftMap(e => InvalidJson(e.getMessage))
+      .toValidatedNec[ValidationError, JsObject]
+      .andThen { jsObject =>
+        (validateEmail(jsObject), validateReminder(jsObject), validateRemindAt(jsObject))
+          .mapN {
+            case (email, reminder, remindAt) =>
+              Reminder(email, reminder, remindAt)
+          }
+      }
   }
 
   println(parseReminder(valid))
