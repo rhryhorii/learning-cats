@@ -1,7 +1,9 @@
 
 package com.exabeam.rgregory.workshop.validation.task
 
+import cats.data.NonEmptyChain.one
 import cats.data.ValidatedNec
+import scala.util.Either.cond
 
 object JsonEntityValidation extends App {
 
@@ -67,8 +69,30 @@ object JsonEntityValidation extends App {
   // field reminder must not be empty
   // field remindAt must be > 0
   def parseReminder(json: String): ValidatedNec[ValidationError, Reminder] = {
-    ???
+    import cats.data._
+    import cats.implicits._
+
+    def validate[A: Reads](jsValue: JsValue, fieldName: String, check: A => Boolean): Either[NonEmptyChain[ValidationError], A] = {
+      for {
+        js <- Either.catchNonFatal(jsValue(fieldName))
+          .leftMap(e => one(MissingField(s"Field $fieldName is missing. Exception: $e")))
+        v <- Either.catchNonFatal(js.as[A])
+          .leftMap(e => one(InvalidField(s"$fieldName: Incorrect field type, $e")))
+        r <- cond(check(v), v, one(InvalidField(fieldName)))
+      } yield r
+    }
+
+    val r = for {
+      j <- Either.catchNonFatal(Json.parse(json)).leftMap(e => one(InvalidJson(s"error $e")))
+      email = validate[String](j, "email", _ contains "@")
+      reminder = validate[String](j, "reminder", _.nonEmpty)
+      remindAt = validate[Long](j, "remindAt", _ > 0)
+      rez <- (email, reminder, remindAt).parMapN(Reminder)
+    } yield rez
+
+    r.toValidated
   }
+
 
   println(parseReminder(valid))
   println(parseReminder(invalidJson))
