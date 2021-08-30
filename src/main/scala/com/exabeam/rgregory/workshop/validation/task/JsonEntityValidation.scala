@@ -1,7 +1,10 @@
 
 package com.exabeam.rgregory.workshop.validation.task
 
-import cats.data.ValidatedNec
+import scala.util.Try
+import play.api.libs.json._
+import cats.implicits._
+import cats.data.{Validated, ValidatedNec}
 
 object JsonEntityValidation extends App {
 
@@ -56,18 +59,54 @@ object JsonEntityValidation extends App {
       |}
       |""".stripMargin
 
-  // example of working with Json library
-  import play.api.libs.json._
-  println(Json.parse(valid).as[JsObject].value("reminder").as[JsString].value)
+  def validateJson(json: String): ValidatedNec[ValidationError, JsObject] = {
+    Validated
+      .fromTry(Try {Json.parse(json).as[JsObject]})
+      .leftMap(e => InvalidJson(e.getMessage.trim))
+      .toValidatedNec
+  }
 
+  def validateField(jsObject: JsObject, field: String): Validated[MissingField, JsValue] = {
+    Validated.fromOption(jsObject.value.get(field), MissingField(field))
+  }
 
-  // Implement Reminder validation
-  //
+  def validateValue[T: Reads](jsValue: JsValue, condition: T => Boolean): Validated[InvalidField, T] = {
+    Validated
+      .fromTry(
+        for {
+          v <- Try { jsValue.as[T] } if condition(v)
+        } yield v
+      ).leftMap(e => InvalidField(e.getMessage))
+  }
+
   // field email must contain '@'
+  def validateEmail(jsObject: JsObject): ValidatedNec[ValidationError, String] = {
+    validateField(jsObject, "email")
+      .andThen(value => validateValue[String](value, _ contains '@'))
+      .toValidatedNec
+  }
+
   // field reminder must not be empty
+  def validateReminder(jsObject: JsObject): ValidatedNec[ValidationError, String] = {
+    validateField(jsObject, "reminder")
+      .andThen(value => validateValue[String](value, _.nonEmpty))
+      .toValidatedNec
+  }
+
   // field remindAt must be > 0
+  def validateRemindAt(jsObject: JsObject): ValidatedNec[ValidationError, Long] = {
+    validateField(jsObject, "remindAt")
+      .andThen(value => validateValue[Long](value, _ > 0))
+      .toValidatedNec
+  }
+
   def parseReminder(json: String): ValidatedNec[ValidationError, Reminder] = {
-    ???
+    validateJson(json).andThen(valid => (
+      validateEmail(valid),
+      validateReminder(valid),
+      validateRemindAt(valid)
+      ).mapN(Reminder.apply)
+    )
   }
 
   println(parseReminder(valid))
